@@ -10,8 +10,13 @@ interface AskPanelProps {
   hasItems: boolean;
 }
 
+// Retrieval breadth options. Matches the backend's accepted top_k range (1–20).
+const TOP_K_OPTIONS = [3, 4, 6, 8, 12] as const;
+const DEFAULT_TOP_K = 4;
+
 export function AskPanel({ hasItems }: AskPanelProps) {
   const [question, setQuestion] = useState("");
+  const [topK, setTopK] = useState<number>(DEFAULT_TOP_K);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<QueryResponse | null>(null);
@@ -25,7 +30,7 @@ export function AskPanel({ hasItems }: AskPanelProps) {
     setError(null);
     setFocusedCitation(null);
     try {
-      const response = await api.query({ question: question.trim() });
+      const response = await api.query({ question: question.trim(), top_k: topK });
       setResult(response);
     } catch (err) {
       setError(messageFromError(err));
@@ -59,7 +64,7 @@ export function AskPanel({ hasItems }: AskPanelProps) {
           placeholder="e.g. What did I save about advisory locks?"
           className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
         />
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
             disabled={asking || !question.trim() || !hasItems}
@@ -67,6 +72,25 @@ export function AskPanel({ hasItems }: AskPanelProps) {
           >
             {asking ? "Thinking…" : "Ask"}
           </button>
+
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            <span title="How many of your most relevant chunks to feed the model">
+              Sources
+            </span>
+            <select
+              value={topK}
+              onChange={(e) => setTopK(Number(e.target.value))}
+              disabled={asking}
+              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+            >
+              {TOP_K_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+
           {!hasItems && (
             <span className="text-sm text-slate-400">Save something first to ask a question.</span>
           )}

@@ -27,6 +27,11 @@ EMPTY_STORE_ANSWER = (
     "Add a note or a URL first."
 )
 
+NO_RELEVANT_CONTENT_ANSWER = (
+    "None of your saved content is relevant enough to answer that. "
+    "Try rephrasing, or save something on this topic first."
+)
+
 SYSTEM_PROMPT = """You answer questions strictly from the numbered context supplied by the user.
 
 Rules:
@@ -67,16 +72,32 @@ class RagService:
 
         top_k = request.top_k or self._settings.retrieval_top_k
         question_embedding = self._ai.embed_text(request.question)
-        retrieved = self._store.search(question_embedding, top_k=top_k)
+        retrieved = self._store.search(
+            question_embedding,
+            top_k=top_k,
+            min_score=self._settings.retrieval_min_score,
+        )
 
         logger.info(
             "retrieved context",
             extra={
                 "top_k": top_k,
+                "min_score": self._settings.retrieval_min_score,
                 "retrieved": len(retrieved),
                 "best_score": round(retrieved[0].score, 4) if retrieved else None,
             },
         )
+
+        # Everything was below the relevance floor: answer honestly instead of
+        # feeding the model an empty context and letting it improvise.
+        if not retrieved:
+            return QueryResponse(
+                question=request.question,
+                answer=NO_RELEVANT_CONTENT_ANSWER,
+                sources=[],
+                model=self._ai.chat_model,
+                retrieved_chunk_count=0,
+            )
 
         sources = self._build_sources(retrieved)
         answer = self._ai.complete_chat(

@@ -185,6 +185,31 @@ def test_search_rejects_a_non_positive_top_k():
         VectorStore().search([1.0, 0.0], top_k=0)
 
 
+def test_search_drops_chunks_below_min_score():
+    store = VectorStore()
+    item = _item()
+    # "east" scores 1.0, "diagonal" ~0.707, "north" 0.0 against the [1, 0] query.
+    store.add_item(
+        item,
+        _chunks(item.id, "north", "diagonal", "east"),
+        [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+    )
+
+    results = store.search([1.0, 0.0], top_k=3, min_score=0.5)
+
+    # The orthogonal "north" chunk (score 0.0) is filtered out.
+    assert [scored.chunk.text for scored in results] == ["east", "diagonal"]
+    assert all(scored.score >= 0.5 for scored in results)
+
+
+def test_search_can_return_nothing_when_all_below_min_score():
+    store = VectorStore()
+    item = _item()
+    store.add_item(item, _chunks(item.id, "orthogonal"), [[0.0, 1.0]])
+
+    assert store.search([1.0, 0.0], top_k=3, min_score=0.5) == []
+
+
 def test_zero_vectors_do_not_break_search():
     store = VectorStore()
     item = _item()

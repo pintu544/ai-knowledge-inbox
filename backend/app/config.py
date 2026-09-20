@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     chunk_size: int = 900
     chunk_overlap: int = 150
     retrieval_top_k: int = 4
+    #: Chunks scoring below this cosine similarity are dropped before they reach
+    #: the model or the citations. Keeps weak, off-topic matches from being shown
+    #: as "sources". 0.0 disables the filter (return whatever top-k finds).
+    retrieval_min_score: float = 0.2
 
     # --- Ingestion limits ---
     url_fetch_timeout_seconds: float = 15.0
@@ -110,6 +114,13 @@ class Settings(BaseSettings):
     def _positive_top_k(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("RETRIEVAL_TOP_K must be greater than 0")
+        return value
+
+    @field_validator("retrieval_min_score")
+    @classmethod
+    def _min_score_in_range(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("RETRIEVAL_MIN_SCORE must be between 0 and 1")
         return value
 
     @model_validator(mode="after")

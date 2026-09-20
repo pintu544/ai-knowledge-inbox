@@ -119,12 +119,19 @@ class VectorStore:
     def is_empty(self) -> bool:
         return self.chunk_count == 0
 
-    def search(self, query_embedding: Iterable[float], top_k: int) -> list[ScoredChunk]:
-        """Return the ``top_k`` chunks most similar to ``query_embedding``.
+    def search(
+        self,
+        query_embedding: Iterable[float],
+        top_k: int,
+        min_score: float = 0.0,
+    ) -> list[ScoredChunk]:
+        """Return up to ``top_k`` chunks most similar to ``query_embedding``.
 
-        Results are ordered by descending cosine similarity. An empty store
-        returns an empty list rather than raising, so callers can answer
-        "nothing saved yet" gracefully.
+        Results are ordered by descending cosine similarity. Chunks scoring
+        below ``min_score`` are dropped, so a weak, off-topic match is never
+        returned just to fill the top-k quota (this can return fewer than
+        ``top_k`` results, or none). An empty store returns an empty list rather
+        than raising, so callers can answer "nothing saved yet" gracefully.
         """
         if top_k <= 0:
             raise ValueError("top_k must be greater than 0")
@@ -150,6 +157,7 @@ class VectorStore:
             return [
                 ScoredChunk(chunk=self._chunks[index], score=float(scores[index]))
                 for index in ranked
+                if float(scores[index]) >= min_score
             ]
 
 

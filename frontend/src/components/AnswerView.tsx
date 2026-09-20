@@ -105,6 +105,32 @@ export function AnswerView({ result, onCitationFocus, focusedCitation }: AnswerV
   );
 }
 
+function RelevanceBar({ score }: { score: number }) {
+  // Cosine similarity is 0–1; clamp for safety and render as a small bar.
+  const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+  const color = score >= 0.6 ? "bg-emerald-500" : score >= 0.4 ? "bg-amber-500" : "bg-slate-400";
+
+  return (
+    <span
+      className="inline-flex items-center gap-1.5"
+      title={`Cosine similarity to your question: ${score.toFixed(3)}`}
+    >
+      <span className="text-slate-400">relevance</span>
+      <span
+        className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="relevance score"
+      >
+        <span className={`block h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className="tabular-nums text-slate-500">{score.toFixed(2)}</span>
+    </span>
+  );
+}
+
 function SourceCard({
   source,
   focused,
@@ -118,9 +144,8 @@ function SourceCard({
     <li
       id={`source-${source.citation}`}
       onClick={onFocus}
-      className={`cursor-pointer rounded-lg border p-4 transition ${
-        focused ? "border-slate-900 ring-2 ring-slate-200" : "border-slate-200 hover:border-slate-300"
-      }`}
+      className={`cursor-pointer rounded-lg border p-4 transition ${focused ? "border-slate-900 ring-2 ring-slate-200" : "border-slate-200 hover:border-slate-300"
+        }`}
     >
       <div className="mb-1 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -132,10 +157,10 @@ function SourceCard({
         <Badge>{source.source_type}</Badge>
       </div>
       <p className="text-sm leading-relaxed text-slate-600">{source.snippet}</p>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 text-xs text-slate-400">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
         <span>chunk #{source.chunk_index}</span>
         <span>·</span>
-        <span>score {source.score.toFixed(3)}</span>
+        <RelevanceBar score={source.score} />
         {source.source_url && (
           <>
             <span>·</span>
