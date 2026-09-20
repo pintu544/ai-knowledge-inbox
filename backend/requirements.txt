@@ -1,0 +1,25 @@
+# AI Knowledge Inbox - backend dependencies (pinned for reproducible installs)
+
+# Web framework + server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Configuration
+pydantic==2.10.5
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# AI provider
+openai==1.59.6
+
+# URL content extraction (readability-style main-article extraction)
+trafilatura==2.0.0
+
+# Vector math for in-memory cosine similarity search
+numpy==2.2.1
+
+# HTTP client (also used by FastAPI's TestClient)
+httpx==0.28.1
+
+# Tests
+pytest==8.3.4
