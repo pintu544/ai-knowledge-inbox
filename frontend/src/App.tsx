@@ -36,9 +36,6 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="mx-auto max-w-5xl px-6 pb-10 text-xs text-slate-400">
-        Storage is in-memory on the backend — restarting the server clears everything.
-      </footer>
     </div>
   );
 }

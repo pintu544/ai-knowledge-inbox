@@ -18,8 +18,5 @@ trafilatura==2.0.0
 # Vector math for in-memory cosine similarity search
 numpy==2.2.1
 
-# HTTP client (also used by FastAPI's TestClient)
+# HTTP client (used by the OpenAI SDK and URL fetching)
 httpx==0.28.1
-
-# Tests
-pytest==8.3.4

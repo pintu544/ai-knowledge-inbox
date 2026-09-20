@@ -18,7 +18,6 @@ A small, production-style web app to **save notes and URLs, then ask questions o
   - [2. Frontend](#2-frontend)
 - [API reference](#api-reference)
 - [Configuration](#configuration)
-- [Running the tests](#running-the-tests)
 - [Design & tradeoffs](#design--tradeoffs)
 - [What breaks at scale](#what-breaks-at-scale)
 - [Project layout](#project-layout)
@@ -217,23 +216,6 @@ The frontend reads `VITE_API_BASE` (default `/api`) if you want to target a back
 
 ---
 
-## Running the tests
-
-Backend has a full pytest suite (chunker, vector store, URL extractor, routes, model resolution, and the OpenAI client — all mocked, no network calls):
-
-```bash
-cd backend
-.\.venv\Scripts\Activate.ps1   # or source .venv/bin/activate
-pytest
-```
-
-Frontend type-check / build:
-
-```bash
-cd frontend
-npm run build   # tsc -b + vite build
-```
-
 ---
 
 ## Deployment
@@ -307,7 +289,6 @@ This is a single-user, in-memory app by design. Moving toward production would m
 │   │   ├── errors.py       single JSON error envelope
 │   │   ├── models.py       Pydantic request/response/domain models
 │   │   └── main.py         app factory + startup wiring
-│   ├── tests/              pytest suite (fully mocked)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
