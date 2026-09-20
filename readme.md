@@ -236,6 +236,31 @@ npm run build   # tsc -b + vite build
 
 ---
 
+## Deployment
+
+The app is deployed as two independent services:
+
+- **Backend → [Railway](https://railway.app):** built with Railpack (auto-detects Python via `runtime.txt` + `requirements.txt`) and started from the `Procfile`, which binds uvicorn to `0.0.0.0:$PORT`. Configuration (`OPENAI_API_KEY`, `OPENAI_MODEL`, `CORS_ORIGINS`, …) is set as Railway environment variables — nothing secret is committed.
+- **Frontend → [Vercel](https://vercel.com):** a static Vite build (`vercel.json` sets the build command, output dir, and SPA rewrite). `VITE_API_BASE` is provided at build time and points at the Railway backend URL.
+
+Deploy sketch (both CLIs assume you're logged in):
+
+```bash
+# Backend
+cd backend
+railway init --name ai-knowledge-inbox
+railway up
+railway variables --set "OPENAI_MODEL=gpt-5.5" --set "CORS_ORIGINS=https://<your-frontend>.vercel.app"
+echo "$OPENAI_API_KEY" | railway variables set OPENAI_API_KEY --stdin
+railway domain            # generate a public URL
+
+# Frontend
+cd ../frontend
+vercel deploy --prod --build-env VITE_API_BASE=https://<your-backend>.up.railway.app
+```
+
+Set `CORS_ORIGINS` on the backend to the frontend's Vercel origin so browser requests are allowed while everything else is blocked.
+
 ## Design & tradeoffs
 
 **Chunking — fixed-size windows snapped to sentence boundaries.**
