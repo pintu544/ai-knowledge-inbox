@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.dependencies import get_openai_client
 from app.errors import register_exception_handlers
 from app.logging_config import configure_logging
+from app.middleware import RateLimitMiddleware
 from app.routes import health, ingest, items, query
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,9 @@ def _validate_chat_model(app: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = get_settings()
+    # Use the exact settings this app was built with, not the global cache, so a
+    # test (or embedder) that injects custom settings sees them at startup too.
+    settings: Settings = getattr(app.state, "settings", None) or get_settings()
 
     if not settings.has_openai_credentials:
         logger.warning(
@@ -82,7 +85,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the application. Accepts settings so tests can inject their own."""
+    """Build the application. Accepts settings so tests can inject their own.
+
+    When settings are supplied explicitly, they are wired through *everything*:
+    logging, CORS, the startup model check, and every service dependency. That
+    is done by storing them on ``app.state`` and overriding the ``get_settings``
+    dependency, so the injected instance is the single source of truth rather
+    than the process-wide cache.
+    """
+    injected = settings is not None
     settings = settings or get_settings()
     configure_logging(level=settings.log_level, as_json=settings.log_json)
 
@@ -92,6 +103,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+    app.state.settings = settings
+    if injected:
+        # Route every `Depends(get_settings)` to this instance too.
+        app.dependency_overrides[get_settings] = lambda: settings
 
     app.add_middleware(
         CORSMiddleware,
@@ -100,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
+    app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.rate_limit_per_minute)
 
     register_exception_handlers(app)
     app.include_router(health.router)

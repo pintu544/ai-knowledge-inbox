@@ -12,8 +12,10 @@ untrusted input: it may hang, redirect somewhere huge, or serve a binary.
 from __future__ import annotations
 
 import html
+import ipaddress
 import logging
 import re
+import socket
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -21,6 +23,18 @@ import httpx
 import trafilatura
 
 logger = logging.getLogger(__name__)
+
+#: How many redirects we are willing to follow. Each hop is re-validated.
+_MAX_REDIRECTS = 5
+
+#: Read the body in bounded chunks so a huge (or compressed-bomb) response is
+#: stopped mid-stream instead of being fully buffered into memory.
+_STREAM_CHUNK_BYTES = 64 * 1024
+
+#: Hard cap on how many raw bytes we will read from a response body. Set well
+#: above ``max_chars`` so extraction still has the full article to work with,
+#: but low enough that a runaway response cannot exhaust memory.
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 _BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -82,6 +96,65 @@ def validate_url(url: str) -> str:
     return candidate
 
 
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for any address a public fetch has no business reaching.
+
+    Covers loopback (127.0.0.0/8, ::1), private ranges (10/8, 172.16/12,
+    192.168/16, fc00::/7), link-local (169.254/16 — including the cloud metadata
+    endpoint 169.254.169.254 — and fe80::/10), and other reserved/unspecified
+    space. IPv4-mapped IPv6 addresses are unwrapped so ``::ffff:127.0.0.1`` is
+    caught too.
+    """
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        ip = ip.ipv4_mapped  # type: ignore[assignment]
+
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _assert_public_host(host: str) -> None:
+    """Resolve ``host`` and reject it if any resolved IP is non-public.
+
+    This is the core SSRF guard: it runs before every request and after every
+    redirect, so a URL cannot reach localhost, a private network, or the cloud
+    metadata service — even via a redirect or a hostname that resolves to one.
+
+    Raises:
+        UrlExtractionError: the host cannot be resolved or points somewhere
+            internal.
+    """
+    # A bare IP literal in the URL is checked directly (no DNS needed).
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if _is_blocked_ip(literal):
+            raise UrlExtractionError("That URL points to a private or reserved address and cannot be fetched.")
+        return
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as error:
+        raise UrlExtractionError(f"Could not resolve the host '{host}'.") from error
+
+    for info in infos:
+        sockaddr = info[4]
+        try:
+            resolved = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _is_blocked_ip(resolved):
+            raise UrlExtractionError("That URL resolves to a private or reserved address and cannot be fetched.")
+
+
 def fetch_and_extract(url: str, timeout_seconds: float = 15.0, max_chars: int = 200_000) -> ExtractedPage:
     """Fetch ``url`` and return its main article text.
 
@@ -133,15 +206,41 @@ def clean_extracted_text(text: str) -> str:
 
 
 def _fetch_html(url: str, timeout_seconds: float) -> str:
-    """GET the URL, following redirects, and return the body as text."""
+    """GET the URL and return the body as text.
+
+    Redirects are followed manually so every hop is re-validated against the
+    SSRF guard (httpx's built-in redirect following would skip that check). The
+    body is streamed and capped so an oversized or compressed-bomb response is
+    stopped mid-read rather than fully buffered.
+    """
+    headers = {"User-Agent": _BROWSER_USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*"}
+
     try:
         with httpx.Client(
             timeout=timeout_seconds,
-            follow_redirects=True,
-            headers={"User-Agent": _BROWSER_USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*"},
+            follow_redirects=False,  # we follow (and re-validate) manually
+            headers=headers,
         ) as client:
-            response = client.get(url)
-            response.raise_for_status()
+            current = url
+            for _ in range(_MAX_REDIRECTS + 1):
+                _assert_public_host(urlparse(current).hostname or "")
+
+                with client.stream("GET", current) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise UrlExtractionError("The site returned a redirect with no destination.")
+                        # Resolve relative redirects against the current URL, then
+                        # re-validate on the next loop iteration.
+                        current = str(response.url.join(location))
+                        continue
+
+                    response.raise_for_status()
+                    _reject_declared_oversize(response)
+                    _reject_non_textual(response)
+                    return _read_capped_text(response)
+
+            raise UrlExtractionError(f"The URL redirected more than {_MAX_REDIRECTS} times; giving up.")
     except httpx.TimeoutException as error:
         raise UrlExtractionError(f"Timed out after {timeout_seconds:g}s fetching the URL.") from error
     except httpx.HTTPStatusError as error:
@@ -151,13 +250,43 @@ def _fetch_html(url: str, timeout_seconds: float) -> str:
     except httpx.RequestError as error:
         raise UrlExtractionError(f"Could not reach the URL: {error}.") from error
 
+
+def _reject_declared_oversize(response: httpx.Response) -> None:
+    """Fail fast when Content-Length already declares an oversized body."""
+    declared = response.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > _MAX_RESPONSE_BYTES:
+        raise UrlExtractionError(
+            f"The page is too large to ingest (declared {int(declared)} bytes, "
+            f"limit {_MAX_RESPONSE_BYTES})."
+        )
+
+
+def _reject_non_textual(response: httpx.Response) -> None:
     content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type and not content_type.startswith(_TEXTUAL_CONTENT_TYPES):
         raise UrlExtractionError(
             f"Unsupported content type '{content_type}'. Only HTML and plain-text pages can be ingested."
         )
 
-    return response.text
+
+def _read_capped_text(response: httpx.Response) -> str:
+    """Stream the body, stopping once the byte cap is exceeded, then decode."""
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes(_STREAM_CHUNK_BYTES):
+        total += len(chunk)
+        if total > _MAX_RESPONSE_BYTES:
+            raise UrlExtractionError(
+                f"The page exceeded the {_MAX_RESPONSE_BYTES}-byte fetch limit while downloading."
+            )
+        chunks.append(chunk)
+
+    body = b"".join(chunks)
+    encoding = response.encoding or "utf-8"
+    try:
+        return body.decode(encoding, errors="replace")
+    except (LookupError, ValueError):
+        return body.decode("utf-8", errors="replace")
 
 
 def _extract_title(html: str, url: str) -> str | None:

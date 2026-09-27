@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     url_fetch_timeout_seconds: float = 15.0
     max_content_chars: int = 200_000
 
+    # --- Abuse protection ---
+    #: Max requests per client IP per minute. Since the app is unauthenticated,
+    #: this is the guard that keeps a public deployment from running up unbounded
+    #: OpenAI spend. 0 disables it (sensible for local single-user use).
+    rate_limit_per_minute: int = 0
+
     # --- Ops ---
     log_level: str = "INFO"
     log_json: bool = True
@@ -121,6 +127,13 @@ class Settings(BaseSettings):
     def _min_score_in_range(cls, value: float) -> float:
         if not 0.0 <= value <= 1.0:
             raise ValueError("RETRIEVAL_MIN_SCORE must be between 0 and 1")
+        return value
+
+    @field_validator("rate_limit_per_minute")
+    @classmethod
+    def _non_negative_rate_limit(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("RATE_LIMIT_PER_MINUTE must be 0 or greater")
         return value
 
     @model_validator(mode="after")

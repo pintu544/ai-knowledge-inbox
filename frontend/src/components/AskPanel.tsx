@@ -28,6 +28,7 @@ export function AskPanel({ hasItems }: AskPanelProps) {
 
     setAsking(true);
     setError(null);
+    setResult(null); // drop the previous answer so a failed query never shows stale results
     setFocusedCitation(null);
     try {
       const response = await api.query({ question: question.trim(), top_k: topK });

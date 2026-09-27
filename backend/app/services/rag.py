@@ -12,6 +12,7 @@ text the claim came from.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.clients.openai_client import OpenAIClient
 from app.config import Settings
@@ -99,11 +100,18 @@ class RagService:
                 retrieved_chunk_count=0,
             )
 
-        sources = self._build_sources(retrieved)
+        # Sources are numbered to match the [n] markers in the prompt/answer.
+        all_sources = self._build_sources(retrieved)
         answer = self._ai.complete_chat(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=_build_user_prompt(request.question, retrieved),
         )
+
+        # Return only the chunks the answer actually cited, and renumber so the
+        # markers stay contiguous ([1], [2], ...). This stops the UI from showing
+        # retrieved-but-unused chunks as "sources", and drops any hallucinated
+        # marker that points at nothing.
+        answer, sources = _align_citations(answer, all_sources)
 
         return QueryResponse(
             question=request.question,
@@ -138,6 +146,60 @@ class RagService:
             )
 
         return sources
+
+
+#: Matches one or more comma-separated numbers in brackets: [1], [2, 3], [10].
+_CITATION_MARKER = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def _align_citations(
+    answer: str, all_sources: list[SourceSnippet]
+) -> tuple[str, list[SourceSnippet]]:
+    """Keep only cited sources and renumber the answer's markers contiguously.
+
+    - Parses every ``[n]`` (and grouped ``[n, m]``) marker in ``answer``.
+    - Drops numbers that do not map to a retrieved source (a hallucinated
+      marker), and drops sources the answer never cited.
+    - Renumbers the survivors to ``[1..k]`` in first-appearance order, rewriting
+      both the answer text and the returned ``SourceSnippet`` list to agree.
+
+    If the model cited nothing valid (e.g. an "I don't know" answer), the answer
+    is returned unchanged with an empty source list.
+    """
+    valid = {source.citation: source for source in all_sources}
+
+    # Which original citation numbers actually appear, in first-appearance order.
+    ordered_original: list[int] = []
+    for match in _CITATION_MARKER.finditer(answer):
+        for raw in match.group(1).split(","):
+            number = int(raw.strip())
+            if number in valid and number not in ordered_original:
+                ordered_original.append(number)
+
+    if not ordered_original:
+        return answer, []
+
+    # Old citation number -> new contiguous number.
+    renumber = {old: new for new, old in enumerate(ordered_original, start=1)}
+
+    def _rewrite(match: re.Match[str]) -> str:
+        mapped = [
+            str(renumber[int(raw.strip())])
+            for raw in match.group(1).split(",")
+            if int(raw.strip()) in renumber
+        ]
+        # Drop a marker entirely if none of its numbers survived.
+        return f"[{', '.join(mapped)}]" if mapped else ""
+
+    rewritten_answer = _CITATION_MARKER.sub(_rewrite, answer)
+    # Tidy the gap a fully-dropped marker can leave (e.g. "Y  ." or "Y ,").
+    rewritten_answer = re.sub(r"\s+([.,;:!?])", r"\1", rewritten_answer)
+    rewritten_answer = re.sub(r"[ \t]{2,}", " ", rewritten_answer).strip()
+
+    sources = [
+        valid[old].model_copy(update={"citation": renumber[old]}) for old in ordered_original
+    ]
+    return rewritten_answer, sources
 
 
 def _build_user_prompt(question: str, retrieved: list[ScoredChunk]) -> str:
